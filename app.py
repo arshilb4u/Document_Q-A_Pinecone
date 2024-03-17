@@ -5,13 +5,19 @@ from dotenv import load_dotenv
 from langchain.document_loaders import  PyPDFDirectoryLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import Pinecone
-from openai import OpenAI
+from pinecone import Pinecone
+from langchain import OpenAI
 from langchain_pinecone import PineconeVectorStore
 from langchain.chains.question_answering import load_qa_chain
 
 # Load the environment variables
 load_dotenv()
+
+
+llm = OpenAI(api_key=os.getenv('OPENAI_API_KEY'),temperature=0.5)
+chain = load_qa_chain(llm,chain_type='stuff')
+pc = Pinecone(api_key=os.getenv('Pinecone_API_KEY'))
+index = pc.Index(os.getenv('Pinecone_Index'))
 
 # load PDF from document folder
 def load_pdf(path):
@@ -22,7 +28,7 @@ def load_pdf(path):
 # convert PDF files to chunks
 def create_chunks(doc, chunk_size = 800, chunk_overlap = 50):
     splitter = RecursiveCharacterTextSplitter(chunk_size = chunk_size, chunk_overlap = chunk_overlap)
-    chunks = splitter.split(doc)
+    chunks = splitter.split_documents(doc)
     return chunks
 
 # create vector Index
@@ -31,8 +37,10 @@ def create_index(chunk_doc, embeddings , Index_name):
     return Index
 
 def retrieve_query(query,docsearch,k=2):
-    results= docsearch.similarity_search(query)
+    results= docsearch.similarity_search(query,k=k)
     return results
+
+
 
 
 def check_document_exist(folder_path):
@@ -63,6 +71,20 @@ def upload_pdf_to_folder(uploaded_file, folder_path):
 
 # Define the Streamlit app
 def main():
+    index_created = []
+    # Define the header
+    st.title('Document Q & A on Custome Documents')
+    st.header('This is a Q & A custome document retrieval system')
+
+    # Define the sidebar
+    st.sidebar.title('Options')
+    st.sidebar.text('Please select below options to proceed')
+
+    # Add content to the main section
+    st.write('Hello, this is the main content of the app.')
+
+    input_text = st.text_input("Please enter the text")
+    Analyze = st.button("Analyze")
     
     folder_path = 'documents'
     document_exist ,files_list= check_document_exist(folder_path)
@@ -82,7 +104,8 @@ def main():
                 for file in files_list:
                     if file.endswith(('.doc', '.docx', '.pdf')):
                         os.remove(os.path.join(folder_path, file))
-                st.success("Documents deleted successfully.")
+                        index.delete(delete_all=True)
+                st.success("Documents and Index deleted from Pinecone successfully.")
             else:
                 st.warning("Deletion not confirmed.")
         else:
@@ -94,6 +117,48 @@ def main():
                 upload_pdf_to_folder(uploaded_file, folder_path)
             else:
                 st.warning("Please upload a file first.")
+        document_exist ,files_list= check_document_exist(folder_path)
+        if document_exist:
+            add_radio = st.radio(
+                        "Please select the method for document analysis",
+                        ("OpenAI Langchain", "LlamaIndex"))
+        else:
+            st.warning("No documents found in the folder.")
+    if document_exist and Analyze:
+        if add_radio == "OpenAI Langchain":
+            with st.spinner():
+                document = load_pdf(folder_path)
+                embeddings = OpenAIEmbeddings()
+                chunks_document = create_chunks(document)
+                # print(chunks_document)
+                if index_created is not None:
+                    index_created= create_index(chunks_document, embeddings, os.getenv('Pinecone_Index'))
+                results =retrieve_query(input_text,index_created)
+                print("Results",results)
+                response=response=chain.run(input_documents=results,question=input_text)
+                st.header("Analysis text")
+                st.write(response)
+                st.divider() 
+                col1, col2 =st.columns(2)
+                col1.subheader("Reference content")
+                col1.write(results[0].page_content)
+                col1.divider()
+                col1.subheader("page Number")
+                col1.write(results[0].metadata['page'])
+                col2.subheader("Reference content")
+                col2.write(results[1].page_content)
+                col2.divider()
+                col2.subheader("page Number")
+                col2.write(results[1].metadata['page'])
+
+            st.success("done")
+
+
+
+
+
+
+
 
         
 
@@ -106,14 +171,4 @@ if __name__ == '__main__':
 
 
 
-# Define the header
-st.title('Document Q & A on Custome Documents')
-st.header('This is a Q & A custome document retrieval system')
-
-# Define the sidebar
-st.sidebar.title('Options')
-st.sidebar.text('Please select below options to proceed')
-
-# Add content to the main section
-st.write('Hello, this is the main content of the app.')
 
